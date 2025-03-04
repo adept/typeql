@@ -1,13 +1,11 @@
 {-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE FlexibleContexts #-}
-module TypeQL.AST where
-import Data.Text (Text)
-import qualified Data.Text as T
+module TypeQL.AST (Expr(..),Comparison(..),parseExpr) where
 import Text.Parsec
 import Text.Parsec.String
 import Text.Parsec.Expr
-import Text.Parsec.Token
+import qualified Text.Parsec.Token as TP
 import Text.Parsec.Language
 
 -- | Comparison operators
@@ -48,11 +46,11 @@ customStringLiteral :: Parser String
 customStringLiteral = do
   quote <- char '"' <|> char '\''
   content <- many (escapedChar quote <|> noneOf [quote])
-  char quote
+  _ <- char quote
   return content
   where
     escapedChar quote = try $ do
-      char '\\'
+      _ <- char '\\'
       escaped <- oneOf [quote, '\\', 'n', 't', 'r']
       return $ case escaped of
         'n' -> '\n'
@@ -64,147 +62,142 @@ customStringLiteral = do
 parseExpr :: String -> Either ParseError Expr
 parseExpr = parse (whiteSpace *> expr <* eof) ""
   where
+    -- Top-level expression parser that matches the AST structure
     expr = buildExpressionParser table term
-
-    -- Separate parsers for different expression types
-    term = do
-      whiteSpace
-      choice
-        [ try (parens expr)
-        , try notExpr
-        , try betweenExpr
-        , try inExpr
-        , try anyExpr
-        , try allExpr
-        , comparisonExpr
+    
+    -- Main term parser - handles all expression types
+    term = whiteSpace *> termExpr <* whiteSpace
+    
+    -- Term expressions are the core expression types
+    termExpr = choice
+      [ try parensExpr
+      , try notExpr
+      , try betweenExpr
+      , try inExpr
+      , try comparisonExpr
+      , try atomicExpr
+      ]
+      
+    -- Atomic expressions are the simplest expression types
+    atomicExpr = choice
+      [ try anyAllExpr
+      , try literalListExpr
+      , try literalExpr
+      , try fieldAccessExpr
+      ]
+    
+    -- Parser for parenthesized expressions
+    parensExpr = parens expr
+    
+    -- Parser for literal values
+    literalExpr = Literal . strip <$> (try customStringLiteral <|> try booleanLiteral <|> many1 (digit <|> char '.' <|> char '-'))
+      where
+      booleanLiteral = choice
+        [ string "true" >> return "True",
+          string "false" >> return "False"
         ]
 
-    -- Simple expression parser (literals, field paths)
-    simpleExpr = choice
-      [ try fieldPathExpr
-      , literal
-      , parens expr
-      ]
-
-    -- Field path parser (handles both FieldRef and FieldPath)
-    fieldPathExpr = do
+    
+    -- Parser for field access (both simple and path)
+    fieldAccessExpr = do
       paths <- identifier `sepBy1` char '.'
       case paths of
         [single] -> return $ FieldRef single
         multiple -> return $ FieldPath multiple
-
-    -- Custom NOT expression parser
+    
+    -- Parser for literal lists
+    literalListExpr = do
+      values <- parens $ sepBy1 literalValue (whiteSpace *> char ',' <* whiteSpace)
+      return $ LiteralList values
+      where
+        literalValue = do
+          (Literal x) <- literalExpr
+          return x
+    
+    -- Parser for ANY/ALL expressions
+    anyAllExpr = choice
+      [ try $ do
+          reserved "ANY"
+          content <- parens (try fieldAccessExpr <|> expr)
+          return $ Any content
+      , try $ do
+          reserved "ALL"
+          content <- parens (try fieldAccessExpr <|> expr)
+          return $ All content
+      ]
+    
+    -- Parser for NOT expressions
     notExpr = do
       reserved "not"
       whiteSpace
       Not <$> term
-
-    -- BETWEEN expression parser
+    
+    -- Parser for BETWEEN expressions
     betweenExpr = do
-      value <- simpleExpr
+      value <- atomicExpr
+      whiteSpace
       reserved "between"
-      lower <- simpleExpr
+      whiteSpace
+      lowerBound <- term
+      whiteSpace
       reserved "and"
-      upper <- simpleExpr
-      return $ Between value lower upper
-
-    -- IN expression parser
+      whiteSpace
+      upperBound <- term
+      return $ Between value lowerBound upperBound
+    
+    -- Parser for IN expressions
     inExpr = do
-      left <- simpleExpr
+      left <- atomicExpr
+      whiteSpace
       reserved "in"
-      right <- literalListExpr <|> fieldPathExpr <|> parens expr
+      whiteSpace
+      right <- choice [try literalListExpr, try fieldAccessExpr, parensExpr]
       return $ In left right
-
-    -- Literal list parser
-    literalListExpr = do
-      literals <- parens $ commaSep literalValue
-      return $ LiteralList literals
-      where
-        literalValue = strip <$> (try customStringLiteral <|> many1 (digit <|> char '.' <|> char '-'))
-
-    -- ANY expression parser
-    anyExpr = do
-      reserved "ANY"
-      expr <- parens expr
-      return $ Any expr
-
-    -- ALL expression parser
-    allExpr = do
-      reserved "ALL"
-      expr <- parens expr
-      return $ All expr
-
-    -- Field path list parser for ANY/ALL
-    fieldPathList = sepBy1 identifier (char '.')
-
-    -- Comparison expression parser
+    
+    -- Parser for comparison expressions
     comparisonExpr = do
-      left <- simpleExpr
+      left <- atomicExpr
       whiteSpace
-      option left $ do
-        op <- comparisonOp
-        right <- simpleExpr
-        case op of
-          Nothing -> return left
-          Just comp -> return $ Compare comp left right
-
-    -- Comparison operator parser
+      comp <- comparisonOp
+      whiteSpace
+      right <- atomicExpr
+      return $ Compare comp left right
+    
+    -- Parser for comparison operators
     comparisonOp = choice
-      [ try (opParser "=" >> return (Just Equal))
-      , try (opParser "!=" >> return (Just NotEqual))
-      , try (opParser ">=" >> return (Just GreaterThanOrEqual))
-      , try (opParser "<=" >> return (Just LessThanOrEqual))
-      , try (opParser ">" >> return (Just GreaterThan))
-      , try (opParser "<" >> return (Just LessThan))
+      [ reservedOp "=" >> return Equal
+      , reservedOp "!=" >> return NotEqual
+      , try (reservedOp ">=") >> return GreaterThanOrEqual
+      , try (reservedOp "<=") >> return LessThanOrEqual
+      , reservedOp ">" >> return GreaterThan
+      , reservedOp "<" >> return LessThan
       ]
-
-    -- Custom operator parser that allows surrounding whitespace
-    opParser name = do
-      whiteSpace
-      reservedOp name
-      whiteSpace
-      return name
-
+    
     -- Expression table with correct operator precedence
     table =
-      [ [Prefix (do
-          reserved "not"
-          return Not
-        )]
-      , [Infix (do
-          reserved "and"
-          whiteSpace
-          return And
-        ) AssocLeft]
-      , [Infix (do
-          reserved "or"
-          whiteSpace
-          return Or
-        ) AssocLeft]
+      [ [Prefix (reserved "not" >> return Not)]
+      , [Infix (reserved "and" >> whiteSpace >> return And) AssocLeft]
+      , [Infix (reserved "or" >> whiteSpace >> return Or) AssocLeft]
       ]
-
-    literal = do
-      whiteSpace
-      Literal <$> (try customStringLiteral <|> many1 (digit <|> char '.' <|> char '-'))
-
+    
+    -- Language definition
     languageDef = emptyDef
-      { commentStart = "/*"
-      , commentEnd = "*/"
-      , commentLine = "--"
-      , identStart = letter
-      , identLetter = alphaNum <|> char '_'
-      , opStart = oneOf "=!<>"
-      , opLetter = oneOf "=!<>"
-      , reservedOpNames = ["=", "!=", "<", ">", "<=", ">="]
-      , reservedNames = ["ANY", "ALL", "BETWEEN", "AND", "OR", "NOT", "IN"]
-      , caseSensitive = False
+      { TP.commentStart = "/*"
+      , TP.commentEnd = "*/"
+      , TP.commentLine = "--"
+      , TP.identStart = letter
+      , TP.identLetter = alphaNum <|> char '_'
+      , TP.opStart = oneOf "=!<>"
+      , TP.opLetter = oneOf "=!<>"
+      , TP.reservedOpNames = ["=", "!=", "<", ">", "<=", ">="]
+      , TP.reservedNames = ["ANY", "ALL", "BETWEEN", "AND", "OR", "NOT", "IN", "between", "and", "or", "not", "in"]
+      , TP.caseSensitive = False
       }
-
-    TokenParser
-      { parens = parens
-      , identifier = identifier
-      , reservedOp = reservedOp
-      , reserved = reserved
-      , whiteSpace = whiteSpace
-      , commaSep = commaSep
-      } = makeTokenParser languageDef
+    
+    TP.TokenParser
+      { TP.parens = parens
+      , TP.identifier = identifier
+      , TP.reservedOp = reservedOp
+      , TP.reserved = reserved
+      , TP.whiteSpace = whiteSpace
+      } = TP.makeTokenParser languageDef
