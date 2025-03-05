@@ -39,21 +39,21 @@ data ExprValue
   deriving (Show, Eq)
 
 -- | Try to convert an expression value to a boolean
-toBool :: ExprValue -> Either String Bool
-toBool (EBool b) = Right b
-toBool (EString s)
+asBool :: ExprValue -> Either String Bool
+asBool (EBool b) = Right b
+asBool (EString s)
   | s == "true" || s == "True" = Right True
   | s == "false" || s == "False" = Right False
   | otherwise = Left $ "Cannot convert string to boolean: " ++ s
-toBool (EList []) = Right False
-toBool (EList _) = Right True
+asBool (EList []) = Right False
+asBool (EList _) = Right True
 
 -- | Try to convert an expression value to a string
-toString :: ExprValue -> Either String String
-toString (EString s) = Right $ strip s
-toString (EBool True) = Right "true"
-toString (EBool False) = Right "false"
-toString (EList _) = Left "Cannot convert list to string"
+asString :: ExprValue -> Either String String
+asString (EString s) = Right $ strip s
+asString (EBool True) = Right "true"
+asString (EBool False) = Right "false"
+asString (EList _) = Left "Cannot convert list to string"
 
 -- | Helper function to strip quotes from strings
 strip :: String -> String
@@ -63,26 +63,26 @@ strip s = case s of
   _ -> s
 
 -- | Try to convert an expression value to a list
-toList :: ExprValue -> Either String [String]
-toList (EList xs) = Right $ map strip xs
-toList (EString s) = Right [strip s]
-toList (EBool True) = Right ["true"]
-toList (EBool False) = Right ["false"]
+asList :: ExprValue -> Either String [String]
+asList (EList xs) = Right $ map strip xs
+asList (EString s) = Right [strip s]
+asList (EBool True) = Right ["true"]
+asList (EBool False) = Right ["false"]
 
 -- | Compare two expression values with the given comparison operator
 compareValues :: ExprValue -> ExprValue -> Comparison -> Either String Bool
 compareValues left right comparison = do
   -- Try numeric comparison first
-  case (readMaybe =<< toString' left, readMaybe =<< toString' right) of
+  case (readMaybe =<< asString' left, readMaybe =<< asString' right) of
     (Just leftNum, Just rightNum) -> Right $ compareF comparison (leftNum :: Double) rightNum
     _ -> do
       -- Fall back to string comparison
-      leftStr <- toString left
-      rightStr <- toString right
+      leftStr <- asString left
+      rightStr <- asString right
       Right $ compareF comparison leftStr rightStr
   where
-    toString' :: ExprValue -> Maybe String
-    toString' val = either (const Nothing) Just (toString val)
+    asString' :: ExprValue -> Maybe String
+    asString' val = either (const Nothing) Just (asString val)
 
 -- | Map comparison operators to their function implementations
 compareF :: Ord a => Comparison -> (a -> a -> Bool)
@@ -92,6 +92,15 @@ compareF GreaterThan = (>)
 compareF LessThan = (<)
 compareF GreaterThanOrEqual = (>=)
 compareF LessThanOrEqual = (<=)
+
+-- convert (x <= y) into (y >= x)
+reflect :: Comparison -> Comparison
+reflect Equal = Equal
+reflect NotEqual = NotEqual
+reflect GreaterThan = LessThan
+reflect LessThan = GreaterThan
+reflect GreaterThanOrEqual = LessThanOrEqual
+reflect LessThanOrEqual = GreaterThanOrEqual
 
 -- | Evaluate an expression against a queryable value
 eval :: Queryable a => a -> Expr -> Either String ExprValue
@@ -104,24 +113,24 @@ eval value expr = case expr of
   
   -- Boolean operations
   And left right -> do
-    leftResult <- eval value left >>= toBool
-    rightResult <- eval value right >>= toBool
+    leftResult <- eval value left >>= asBool
+    rightResult <- eval value right >>= asBool
     Right $ EBool (leftResult && rightResult)
     
   Or left right -> do
-    leftResult <- eval value left >>= toBool
-    rightResult <- eval value right >>= toBool
+    leftResult <- eval value left >>= asBool
+    rightResult <- eval value right >>= asBool
     Right $ EBool (leftResult || rightResult)
     
   Not subExpr -> do
-    result <- eval value subExpr >>= toBool
+    result <- eval value subExpr >>= asBool
     Right $ EBool (not result)
   
   -- Quantifier operators in comparison context
   Compare cmp (Any subExpr) right -> evalAnyComparison value cmp subExpr right
-  Compare cmp left (Any subExpr) -> evalComparisonAny value cmp left subExpr
+  Compare cmp left (Any subExpr) -> evalAnyComparison value (reflect cmp) subExpr left
   Compare cmp (All subExpr) right -> evalAllComparison value cmp subExpr right
-  Compare cmp left (All subExpr) -> evalComparisonAll value cmp left subExpr
+  Compare cmp left (All subExpr) -> evalAllComparison value (reflect cmp) subExpr left
   
   -- Regular comparison
   Compare cmp left right -> do
@@ -131,24 +140,14 @@ eval value expr = case expr of
     Right $ EBool compareResult
     
   Between (Any subExpr) low high -> do
-    let lowResult = evalAnyComparison value GreaterThanOrEqual subExpr low
-        highResult = evalAnyComparison value LessThanOrEqual subExpr high
-    case (lowResult, highResult) of
-      (Left err, _) -> Left err
-      (Right _, Left err) -> Left err
-      (Right (EBool greaterOrEqual), Right (EBool lessOrEqual)) ->
-              Right $ EBool (greaterOrEqual && lessOrEqual)
-      _ -> Left $ "ANY() BETWEEN expected two bools, got:  " ++ show lowResult ++ ", " ++ show highResult
+    lowResult <- evalAnyComparison value GreaterThanOrEqual subExpr low >>= asBool
+    highResult <- evalAnyComparison value LessThanOrEqual subExpr high >>= asBool
+    Right $ EBool (lowResult && highResult)
 
   Between (All subExpr) low high -> do
-    let lowResult = evalAllComparison value GreaterThanOrEqual subExpr low
-        highResult = evalAllComparison value LessThanOrEqual subExpr high
-    case (lowResult, highResult) of
-      (Left err, _) -> Left err
-      (Right _, Left err) -> Left err
-      (Right (EBool greaterOrEqual), Right (EBool lessOrEqual)) ->
-              Right $ EBool (greaterOrEqual && lessOrEqual)
-      _ -> Left $ "ALL() BETWEEN expected two bools, got:  " ++ show lowResult ++ ", " ++ show highResult
+    lowResult <- evalAllComparison value GreaterThanOrEqual subExpr low >>= asBool
+    highResult <- evalAllComparison value LessThanOrEqual subExpr high >>= asBool
+    Right $ EBool (lowResult && highResult)
     
   -- Between operation
   Between subExpr low high -> do
@@ -163,51 +162,33 @@ eval value expr = case expr of
   In target collection -> do
     targetResult <- eval value target
     collectionResult <- eval value collection
-    collectionList <- toList collectionResult
-    targetStr <- toString targetResult
+    collectionList <- asList collectionResult
+    targetStr <- asString targetResult
     Right $ EBool (targetStr `elem` collectionList)
     
   -- Standalone ANY operator
   Any subExpr -> do
     result <- eval value subExpr
-    resultList <- toList result
-    Right $ EBool (any asBool resultList)
+    resultList <- asList result
+    Right $ EBool (any fromString resultList)
     
   -- Standalone ALL operator
   All subExpr -> do
     result <- eval value subExpr
-    resultList <- toList result
-    Right $ EBool (not (null resultList) && all asBool resultList)
-    
-  where
-    asBool "True" = True
-    asBool "true" = True
-    asBool _ = False
+    resultList <- asList result
+    Right $ EBool (not (null resultList) && all fromString resultList)
 
 -- | Evaluate a comparison where the left side is ANY(...)
 evalAnyComparison :: Queryable a => a -> Comparison -> Expr -> Expr -> Either String ExprValue
 evalAnyComparison value cmp subExpr right = do
   subResult <- eval value subExpr
   rightResult <- eval value right
-  subList <- toList subResult
+  subList <- asList subResult
   
   if null subList
     then Right $ EBool False
     else do
       compareResults <- mapM (\item -> compareValues (EString item) rightResult cmp) subList
-      Right $ EBool (any id compareResults)
-
--- | Evaluate a comparison where the right side is ANY(...)
-evalComparisonAny :: Queryable a => a -> Comparison -> Expr -> Expr -> Either String ExprValue
-evalComparisonAny value cmp left subExpr = do
-  leftResult <- eval value left
-  subResult <- eval value subExpr
-  subList <- toList subResult
-  
-  if null subList
-    then Right $ EBool False
-    else do
-      compareResults <- mapM (\item -> compareValues leftResult (EString item) cmp) subList
       Right $ EBool (any id compareResults)
 
 -- | Evaluate a comparison where the left side is ALL(...)
@@ -215,7 +196,7 @@ evalAllComparison :: Queryable a => a -> Comparison -> Expr -> Expr -> Either St
 evalAllComparison value cmp subExpr right = do
   subResult <- eval value subExpr
   rightResult <- eval value right
-  subList <- toList subResult
+  subList <- asList subResult
   
   if null subList
     then Right $ EBool False
@@ -223,15 +204,3 @@ evalAllComparison value cmp subExpr right = do
       compareResults <- mapM (\item -> compareValues (EString item) rightResult cmp) subList
       Right $ EBool (all id compareResults)
 
--- | Evaluate a comparison where the right side is ALL(...)
-evalComparisonAll :: Queryable a => a -> Comparison -> Expr -> Expr -> Either String ExprValue
-evalComparisonAll value cmp left subExpr = do
-  leftResult <- eval value left
-  subResult <- eval value subExpr
-  subList <- toList subResult
-  
-  if null subList
-    then Right $ EBool False
-    else do
-      compareResults <- mapM (\item -> compareValues leftResult (EString item) cmp) subList
-      Right $ EBool (all id compareResults)

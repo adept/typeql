@@ -1,11 +1,12 @@
 {-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# OPTIONS_GHC -fno-warn-orphans #-}
 
 module QuerySpec (spec) where
 
 import Test.Hspec
-import TypeQL (whereQ, Queryable, Generic)
-import Data.Text (Text)
+import TypeQL (whereQ, Queryable, Literal(..), Generic)
+import Data.Text (Text, unpack, pack)
 import Data.Time (Day)
 import Data.Time.Calendar (fromGregorian)
 
@@ -17,6 +18,12 @@ data PaymentStatus = Pending | Completed | Refunded | Cancelled
 
 -- No implementation needed due to Read/Show defaults
 instance Queryable PaymentStatus
+
+instance Literal Day
+instance Literal PaymentStatus
+instance Literal Text where
+  toString = unpack
+  fromString = pack
 
 -- Line item in an order
 data LineItem = LineItem {
