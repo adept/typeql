@@ -66,7 +66,7 @@ instance Queryable Order
 expensiveOrders = whereQ orders "ANY(items.itemPrice) > 100"
 ```
 
-For more examples, see `QuerySpec.sh`in the `test` folder.
+For more examples, see `QuerySpec.hs`in the `test` folder.
 
 ## License
 
