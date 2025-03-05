@@ -1,10 +1,10 @@
 # TypeQL
 
-TypeQL is a type-safe library for SQL-like querying of Haskell data structures.
+TypeQL is a library for SQL-like querying of Haskell data structures.
 
 ## Overview
 
-TypeQL leverages Haskell's strong type system and Generic programming to let you query your data structures with familiar SQL-like syntax:
+TypeQL leverages Haskell's type system and Generic typeclass to let you query your data structures with familiar SQL-like syntax:
 
 ```haskell
 -- Find all transactions from January with "invoice" tag
