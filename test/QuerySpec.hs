@@ -4,8 +4,6 @@
 module QuerySpec (spec) where
 
 import Test.Hspec
---import Test.QuickCheck
---import Prelude
 import TypeQL (whereQ, Queryable, Generic)
 import Data.Text (Text)
 import Data.Time (Day)
@@ -80,7 +78,7 @@ spec :: Spec
 spec = describe "TypeQL Queries" $ do
     let orders = sampleOrders
     
-    it "simpe equality" $ do
+    it "simple equality" $ do
       let completedOrders = whereQ orders "status = 'Completed'"
       length completedOrders `shouldBe` 3
     
@@ -95,6 +93,14 @@ spec = describe "TypeQL Queries" $ do
     it "ANY + equality" $ do
       let outOfStockOrders = whereQ orders "ANY(items.itemInStock) = false"
       length outOfStockOrders `shouldBe` 1
+
+    it "bare ALL" $ do
+      let outOfStockOrders = whereQ orders "ALL(items.itemInStock)"
+      length outOfStockOrders `shouldBe` 4
+
+    it "bare ANY" $ do
+      let outOfStockOrders = whereQ orders "ANY(items.itemInStock)"
+      length outOfStockOrders `shouldBe` 5
     
     it "ALL + inequality" $ do
       let premiumOrders = whereQ orders "ALL(items.itemPrice) > 100"
@@ -102,6 +108,30 @@ spec = describe "TypeQL Queries" $ do
     
     it "ANY + inequality" $ do
       let multiItemOrders = whereQ orders "ANY(items.itemQuantity) > 1"
+      length multiItemOrders `shouldBe` 1
+
+    it "IN literals" $ do
+      let multiItemOrders = whereQ orders "status in ('Pending','Cancelled')"
+      length multiItemOrders `shouldBe` 2
+
+    it "IN field" $ do
+      let multiItemOrders = whereQ orders "'Laptop' in (items.itemName)"
+      length multiItemOrders `shouldBe` 1
+
+    it "BETWEEN int" $ do
+      let multiItemOrders = whereQ orders "orderTotal between 100 and 200"
+      length multiItemOrders `shouldBe` 1
+
+    it "BETWEEN date" $ do
+      let multiItemOrders = whereQ orders "orderDate between '2025-02-01' and '2025-02-10'"
+      length multiItemOrders `shouldBe` 1
+
+    it "ALL + BETWEEN" $ do
+      let multiItemOrders = whereQ orders "all(items.itemPrice) between 20 and 130"
+      length multiItemOrders `shouldBe` 1
+
+    it "ANY + BETWEEN" $ do
+      let multiItemOrders = whereQ orders "ANY(items.itemPrice) between 750 and 850"
       length multiItemOrders `shouldBe` 1
     
     it "complex query (=,<,ANY)" $ do

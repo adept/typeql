@@ -157,6 +157,10 @@ spec = describe "TypeQL Expression Parser" $ do
       parseExpr "user.id in allowed_users" `shouldBe`
         Right (In (FieldPath ["user", "id"]) (FieldRef "allowed_users"))
 
+    it "handles IN with literal and field path" $ do
+      parseExpr "'Laptop' in (items.itemName)" `shouldBe`
+        Right (In (Literal "Laptop") (FieldPath ["items", "itemName"]))
+
   describe "Complex Expressions" $ do
     it "parses nested and complex boolean expressions" $ do
       parseExpr "(age > 18 and status = 'active') or role = 'admin'" `shouldBe` 

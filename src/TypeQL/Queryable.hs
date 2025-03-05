@@ -59,6 +59,7 @@ instance {-# OVERLAPPING #-} GQueryable (K1 R String) where
   
   gSelect (K1 x) "" = Just x
   gSelect _ _ = Nothing
+
 instance {-# OVERLAPPABLE #-} Show a => GQueryable (K1 R a) where
   gSelectList (K1 x) [] = Just [show x]
   gSelectList _ _ = Nothing
@@ -82,6 +83,7 @@ instance {-# OVERLAPPING #-} (Generic a, Queryable a, a ~ a) => GQueryable (K1 R
        else Just (concat filtered)
   
   gSelect (K1 _) _ = Nothing  -- Select only works for single values, not lists
+
 instance (GQueryable a, GQueryable b) => GQueryable (a :*: b) where
   gSelectList (a :*: b) fields = case (gSelectList a fields, gSelectList b fields) of
     (Just xs, Just ys) -> Just (xs ++ ys)

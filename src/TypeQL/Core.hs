@@ -13,10 +13,7 @@ module TypeQL.Core
   ( whereQ
   ) where
 
-import Data.Maybe (fromMaybe, isJust, catMaybes)
-import GHC.Generics (Generic, Rep)
 import Text.Read (readMaybe)
-import Data.List (isInfixOf)
 
 import TypeQL.AST
 import TypeQL.Queryable
@@ -39,35 +36,38 @@ data ExprValue
   = EString String
   | EList [String]
   | EBool Bool
-  | ENull
   deriving (Show, Eq)
 
 -- | Try to convert an expression value to a boolean
 toBool :: ExprValue -> Either String Bool
 toBool (EBool b) = Right b
 toBool (EString s)
-  | s == "true" || s == "1" = Right True
-  | s == "false" || s == "0" || s == "" = Right False
+  | s == "true" || s == "True" = Right True
+  | s == "false" || s == "False" = Right False
   | otherwise = Left $ "Cannot convert string to boolean: " ++ s
 toBool (EList []) = Right False
 toBool (EList _) = Right True
-toBool ENull = Right False
 
 -- | Try to convert an expression value to a string
 toString :: ExprValue -> Either String String
-toString (EString s) = Right s
+toString (EString s) = Right $ strip s
 toString (EBool True) = Right "true"
 toString (EBool False) = Right "false"
 toString (EList _) = Left "Cannot convert list to string"
-toString ENull = Right ""
+
+-- | Helper function to strip quotes from strings
+strip :: String -> String
+strip s = case s of
+  ('"':xs) | last xs == '"' -> init xs
+  ('\'':xs) | last xs == '\'' -> init xs
+  _ -> s
 
 -- | Try to convert an expression value to a list
 toList :: ExprValue -> Either String [String]
-toList (EList xs) = Right xs
-toList (EString s) = Right [s]
+toList (EList xs) = Right $ map strip xs
+toList (EString s) = Right [strip s]
 toList (EBool True) = Right ["true"]
 toList (EBool False) = Right ["false"]
-toList ENull = Right []
 
 -- | Compare two expression values with the given comparison operator
 compareValues :: ExprValue -> ExprValue -> Comparison -> Either String Bool
@@ -130,6 +130,26 @@ eval value expr = case expr of
     compareResult <- compareValues leftResult rightResult cmp
     Right $ EBool compareResult
     
+  Between (Any subExpr) low high -> do
+    let lowResult = evalAnyComparison value GreaterThanOrEqual subExpr low
+        highResult = evalAnyComparison value LessThanOrEqual subExpr high
+    case (lowResult, highResult) of
+      (Left err, _) -> Left err
+      (Right _, Left err) -> Left err
+      (Right (EBool greaterOrEqual), Right (EBool lessOrEqual)) ->
+              Right $ EBool (greaterOrEqual && lessOrEqual)
+      _ -> Left $ "ANY() BETWEEN expected two bools, got:  " ++ show lowResult ++ ", " ++ show highResult
+
+  Between (All subExpr) low high -> do
+    let lowResult = evalAllComparison value GreaterThanOrEqual subExpr low
+        highResult = evalAllComparison value LessThanOrEqual subExpr high
+    case (lowResult, highResult) of
+      (Left err, _) -> Left err
+      (Right _, Left err) -> Left err
+      (Right (EBool greaterOrEqual), Right (EBool lessOrEqual)) ->
+              Right $ EBool (greaterOrEqual && lessOrEqual)
+      _ -> Left $ "ALL() BETWEEN expected two bools, got:  " ++ show lowResult ++ ", " ++ show highResult
+    
   -- Between operation
   Between subExpr low high -> do
     subResult <- eval value subExpr
@@ -138,7 +158,7 @@ eval value expr = case expr of
     greaterOrEqual <- compareValues subResult lowResult GreaterThanOrEqual
     lessOrEqual <- compareValues subResult highResult LessThanOrEqual
     Right $ EBool (greaterOrEqual && lessOrEqual)
-    
+
   -- In operation
   In target collection -> do
     targetResult <- eval value target
@@ -151,16 +171,18 @@ eval value expr = case expr of
   Any subExpr -> do
     result <- eval value subExpr
     resultList <- toList result
-    Right $ EBool (any nonEmpty resultList)
+    Right $ EBool (any asBool resultList)
     
   -- Standalone ALL operator
   All subExpr -> do
     result <- eval value subExpr
     resultList <- toList result
-    Right $ EBool (not (null resultList) && all nonEmpty resultList)
+    Right $ EBool (not (null resultList) && all asBool resultList)
     
   where
-    nonEmpty s = s /= "" && s /= "false" && s /= "0"
+    asBool "True" = True
+    asBool "true" = True
+    asBool _ = False
 
 -- | Evaluate a comparison where the left side is ANY(...)
 evalAnyComparison :: Queryable a => a -> Comparison -> Expr -> Expr -> Either String ExprValue

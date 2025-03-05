@@ -10,21 +10,21 @@
 --
 -- @
 -- data Person = Person {
---   name :: Text,
+--   name :: String,
 --   age :: Int,
---   email :: Text
--- } deriving (Eq, Show, Generic, Typeable)
+--   email :: String
+-- } deriving (Eq, Show, Generic)
 --
--- instance 'Queryable' Person
+-- instance Queryable Person
 --
 -- -- Query the data
--- youngPeople = 'where_' "age < 30" people
--- bobOrAlice = 'where_' "name = 'Bob' or name = 'Alice'" people
+-- youngPeople = whereQ people "age < 30"
+-- bobOrAlice = whereQ people "name = 'Bob' or name = 'Alice'"
 -- @
 --
 -- = Nested queries with ANY/ALL
 --
--- For querying into nested collections, use the quantifiers:
+-- For querying into nested collections, use the ANY or ALL:
 --
 -- @
 -- data Transaction = Transaction {
@@ -32,24 +32,21 @@
 --   items :: [Item]
 -- } deriving (Eq, Show, Generic, Typeable)
 --
--- instance 'NestedFieldAccess' Transaction  -- Implement this for nested querying
--- instance 'QuantifiableRecord' Transaction  -- Enable quantifiers
+-- instance Queryable Transaction
+-- instance Queryable Item
 --
 -- -- Query with ANY/ALL
--- hasExpensiveItem = 'whereQ' "ANY(items.price) > 100" transactions
--- allInStock = 'whereQ' "ALL(items.inStock) = true" transactions
+-- hasExpensiveItem = whereQ transactions "ANY(items.price) > 100"
+-- allInStock = whereQ transactions "ALL(items.inStock)"
 -- @
 
 module TypeQL 
-  ( -- * Basic querying
+  (
     whereQ
-  , Queryable
-  
-    -- * Re-exports
+  , module TypeQL.Queryable
   , Generic
   ) where
 
 import TypeQL.Core
-import TypeQL.AST()
-import TypeQL.Queryable (Queryable)
+import TypeQL.Queryable
 import GHC.Generics (Generic)
